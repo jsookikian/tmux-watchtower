@@ -174,6 +174,11 @@ pub fn build_app_menu<R: Runtime>(
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
 
+    let minimum_mode_enabled =
+        CheckMenuItemBuilder::with_id("minimum_mode_enabled", "Minimum Mode")
+            .checked(state.settings.minimum_mode_enabled)
+            .build(app)?;
+
     let opacity_submenu = build_opacity_submenu(app, &state.settings)?;
 
     let sound_enabled = CheckMenuItemBuilder::with_id("sound_enabled", "Sound")
@@ -186,6 +191,7 @@ pub fn build_app_menu<R: Runtime>(
         .item(&open_dashboard)
         .separator()
         .item(&always_on_top)
+        .item(&minimum_mode_enabled)
         .item(&opacity_submenu)
         .item(&sound_enabled)
         .build()?;

@@ -62,12 +62,23 @@ const Dashboard = () => {
     return () => unlisten?.();
   }, []);
 
-  // Resize window based on active state
+  // Resize window based on active state (only when minimum mode is enabled)
   useEffect(() => {
     const window = getCurrentWindow();
 
     const resizeWindow = async () => {
       const scaleFactor = await window.scaleFactor();
+
+      // When minimum mode is disabled, restore window if it was shrunk
+      if (!settings.minimum_mode_enabled) {
+        const saved = savedStateRef.current;
+        if (saved) {
+          await window.setSize(new LogicalSize(saved.width, saved.height));
+          await window.setPosition(new LogicalPosition(saved.x, saved.y));
+          savedStateRef.current = null;
+        }
+        return;
+      }
 
       if (isActive) {
         // Restore to previous size and position
@@ -96,7 +107,7 @@ const Dashboard = () => {
     };
 
     resizeWindow().catch(console.error);
-  }, [isActive]);
+  }, [isActive, settings.minimum_mode_enabled]);
 
   // Handle window opacity based on focus
   useWindowOpacity(settings.opacity_active, settings.opacity_inactive);
@@ -123,8 +134,8 @@ const Dashboard = () => {
     );
   }
 
-  // Show minimum view when inactive
-  if (!isActive) {
+  // Show minimum view when inactive and minimum mode is enabled
+  if (!isActive && settings.minimum_mode_enabled) {
     return <MinimumView sessions={dashboardData.sessions} />;
   }
 

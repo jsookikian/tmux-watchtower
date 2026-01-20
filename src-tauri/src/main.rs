@@ -282,6 +282,21 @@ fn main() {
                             eprintln!("[eocc] Failed to acquire lock for always_on_top: {:?}", e)
                         }
                     },
+                    "minimum_mode_enabled" => match state.lock() {
+                        Ok(mut state_guard) => {
+                            state_guard.settings.minimum_mode_enabled =
+                                !state_guard.settings.minimum_mode_enabled;
+                            save_settings(app, &state_guard.settings);
+                            let _ = app.emit("settings-updated", &state_guard.settings);
+                            update_tray_and_badge(app, &state_guard);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[eocc] Failed to acquire lock for minimum_mode_enabled: {:?}",
+                                e
+                            )
+                        }
+                    },
                     "sound_enabled" => match state.lock() {
                         Ok(mut state_guard) => {
                             state_guard.settings.sound_enabled =
