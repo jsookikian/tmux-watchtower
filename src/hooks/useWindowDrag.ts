@@ -15,13 +15,13 @@ declare global {
 
 export const useWindowDrag = () => {
   useEffect(() => {
-    // Use document.querySelector exactly like the original implementation
-    const container = document.querySelector('.container') as HTMLElement | null;
-    if (!container) return;
-
     const handleMouseDown = async (e: MouseEvent) => {
-      // Check for mini-view mode by checking DOM class (exactly like original)
+      // Check for mini-view mode by checking DOM class
       if (!document.body.classList.contains('mini-view')) return;
+
+      // Only handle clicks inside .container
+      const container = (e.target as HTMLElement).closest('.container');
+      if (!container) return;
 
       // Get appWindow fresh on each mousedown
       const appWindow = window.__TAURI__?.window?.getCurrentWindow();
@@ -50,7 +50,7 @@ export const useWindowDrag = () => {
       }
     };
 
-    container.addEventListener('mousedown', handleMouseDown);
-    return () => container.removeEventListener('mousedown', handleMouseDown);
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
   }, []);
 };
