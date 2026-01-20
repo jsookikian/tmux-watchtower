@@ -12,8 +12,9 @@ export const defaultDashboardData: DashboardData = { sessions: [], events: [] };
 
 export const defaultSettings: Settings = {
   always_on_top: true,
+  minimum_mode_enabled: true,
   opacity_active: 1.0,
-  opacity_inactive: 0.3,
+  opacity_inactive: 1.0,
   sound_enabled: true,
 };
 
