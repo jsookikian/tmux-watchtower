@@ -1,6 +1,11 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
+import {
+  getCurrentWindow,
+  LogicalSize,
+  LogicalPosition,
+  availableMonitors,
+} from '@tauri-apps/api/window';
 import { AppProvider } from '@/context/AppContext';
 import { useAppContext } from '@/context/useAppContext';
 import { useWindowOpacity } from '@/hooks/useWindowOpacity';
@@ -29,10 +34,51 @@ interface SavedWindowState {
   y: number;
 }
 
+async function clampPositionToScreen(
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Promise<{ x: number; y: number }> {
+  try {
+    const monitors = await availableMonitors();
+    if (monitors.length === 0) return { x, y };
+
+    // Find monitor that contains the point, or use first monitor
+    let targetMonitor = monitors.find((m) => {
+      const mx = m.position.x;
+      const my = m.position.y;
+      const mw = m.size.width;
+      const mh = m.size.height;
+      return x >= mx && x < mx + mw && y >= my && y < my + mh;
+    });
+
+    if (!targetMonitor) {
+      targetMonitor = monitors[0];
+    }
+
+    const mx = targetMonitor.position.x;
+    const my = targetMonitor.position.y;
+    const mw = targetMonitor.size.width;
+    const mh = targetMonitor.size.height;
+
+    // Clamp position to keep window within monitor bounds
+    const clampedX = Math.max(mx, Math.min(x, mx + mw - width));
+    const clampedY = Math.max(my, Math.min(y, my + mh - height));
+
+    return { x: clampedX, y: clampedY };
+  } catch {
+    return { x, y };
+  }
+}
+
+const DEBOUNCE_MS = 150;
+
 const Dashboard = () => {
   const { dashboardData, settings, isLoading, refreshData } = useAppContext();
   const [isActive, setIsActive] = useState(true);
   const savedStateRef = useRef<SavedWindowState | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Always apply mini-view class to body
   useEffect(() => {
@@ -42,24 +88,50 @@ const Dashboard = () => {
     };
   }, []);
 
-  // Track window active state for minimum mode
+  // Track window active state for minimum mode (with debounce)
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let mounted = true;
 
-    // Listen for dashboard-active event
-    listen<boolean>('dashboard-active', (event) => {
-      setIsActive(event.payload);
-    }).then((u) => {
-      unlisten = u;
-    });
+    const debouncedSetActive = (active: boolean) => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        if (mounted) setIsActive(active);
+      }, DEBOUNCE_MS);
+    };
 
-    // Set initial state
-    getCurrentWindow()
-      .isFocused()
-      .then(setIsActive)
-      .catch(console.error);
+    const setup = async () => {
+      try {
+        // Set initial state (no debounce for initial)
+        const focused = await getCurrentWindow().isFocused();
+        if (mounted) setIsActive(focused);
 
-    return () => unlisten?.();
+        // Listen for dashboard-active event
+        const u = await listen<boolean>('dashboard-active', (event) => {
+          if (mounted) debouncedSetActive(event.payload);
+        });
+
+        if (mounted) {
+          unlisten = u;
+        } else {
+          u();
+        }
+      } catch (error) {
+        console.error('Failed to setup window active state tracking:', error);
+      }
+    };
+
+    setup();
+
+    return () => {
+      mounted = false;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      unlisten?.();
+    };
   }, []);
 
   // Resize window based on active state (only when minimum mode is enabled)
@@ -73,8 +145,9 @@ const Dashboard = () => {
       if (!settings.minimum_mode_enabled) {
         const saved = savedStateRef.current;
         if (saved) {
+          const clamped = await clampPositionToScreen(saved.x, saved.y, saved.width, saved.height);
           await window.setSize(new LogicalSize(saved.width, saved.height));
-          await window.setPosition(new LogicalPosition(saved.x, saved.y));
+          await window.setPosition(new LogicalPosition(clamped.x, clamped.y));
           savedStateRef.current = null;
         }
         return;
@@ -84,8 +157,9 @@ const Dashboard = () => {
         // Restore to previous size and position
         const saved = savedStateRef.current;
         if (saved) {
+          const clamped = await clampPositionToScreen(saved.x, saved.y, saved.width, saved.height);
           await window.setSize(new LogicalSize(saved.width, saved.height));
-          await window.setPosition(new LogicalPosition(saved.x, saved.y));
+          await window.setPosition(new LogicalPosition(clamped.x, clamped.y));
         }
       } else {
         // Save current size and position before minimizing
@@ -118,12 +192,24 @@ const Dashboard = () => {
   // Bring diff windows to front when dashboard is focused (via Cmd+Tab etc.)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let mounted = true;
+
     onWindowFocus(() => {
       bringDiffWindowsToFront().catch(console.error);
-    }).then((u) => {
-      unlisten = u;
-    });
-    return () => unlisten?.();
+    })
+      .then((u) => {
+        if (mounted) {
+          unlisten = u;
+        } else {
+          u();
+        }
+      })
+      .catch(console.error);
+
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
   }, []);
 
   if (isLoading) {
