@@ -267,12 +267,15 @@ const Dashboard = () => {
           // Check again after await in case state changed
           if (isActiveRef.current) return;
 
-          // Ensure minimum width of 240px and minimum height of 240px for visibility
-          const minSize = 240;
-          if (logicalWidth < minSize - 1 || logicalHeight < minSize - 1) {
-            const newWidth = Math.max(logicalWidth, minSize);
-            const newHeight = Math.max(logicalHeight, minSize);
-            await window.setSize(new LogicalSize(newWidth, newHeight));
+          // If OS unexpectedly enlarged the window, restore mini view size
+          if (
+            logicalWidth > MINIMUM_VIEW_WIDTH + 1 ||
+            logicalHeight > MINIMUM_VIEW_HEIGHT + 1
+          ) {
+            const miniSize = new LogicalSize(MINIMUM_VIEW_WIDTH, MINIMUM_VIEW_HEIGHT);
+            await window.setSize(miniSize);
+            await window.setMinSize(miniSize);
+            await window.setMaxSize(miniSize);
           }
         });
 
