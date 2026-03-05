@@ -60,10 +60,16 @@ fn run_tmux_command(args: &[&str]) -> Result<String, String> {
         "tmux path not available. Please start a Claude Code session first.".to_string()
     })?;
 
+    let start = std::time::Instant::now();
     let output = Command::new(&tmux_path)
         .args(args)
         .output()
         .map_err(|e| format!("Failed to execute tmux: {}", e))?;
+
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(200) {
+        log::warn!(target: "eocc.perf", "tmux {:?}: {:?}", args, elapsed);
+    }
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
