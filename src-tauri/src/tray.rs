@@ -4,6 +4,8 @@ use crate::menu::build_tray_menu;
 use crate::state::AppState;
 
 pub fn update_tray_and_badge(app: &tauri::AppHandle, state: &AppState) {
+    let start = std::time::Instant::now();
+
     // Update tray menu
     if let Some(tray) = app.tray_by_id("main") {
         if let Ok(new_menu) = build_tray_menu(app, state) {
@@ -33,9 +35,19 @@ pub fn update_tray_and_badge(app: &tauri::AppHandle, state: &AppState) {
         };
         let _ = window.set_badge_count(badge_count);
     }
+
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(50) {
+        log::warn!(target: "eocc.perf", "update_tray_and_badge: {:?}", elapsed);
+    }
 }
 
 pub fn emit_state_update(app: &tauri::AppHandle, state: &AppState) {
+    let start = std::time::Instant::now();
     let data = state.to_dashboard_data();
     let _ = app.emit("state-updated", &data);
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(50) {
+        log::warn!(target: "eocc.perf", "emit_state_update: {:?}", elapsed);
+    }
 }

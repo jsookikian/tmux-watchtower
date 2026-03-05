@@ -17,10 +17,26 @@ use crate::tray::{emit_state_update, update_tray_and_badge};
 
 const LOCK_ERROR: &str = "Failed to acquire state lock";
 
+fn log_slow_lock(label: &str, elapsed: std::time::Duration) {
+    if elapsed > std::time::Duration::from_millis(10) {
+        log::warn!(target: "eocc.perf", "{}: slow lock {:?}", label, elapsed);
+    }
+}
+
+fn log_slow_op(label: &str, elapsed: std::time::Duration) {
+    if elapsed > std::time::Duration::from_millis(100) {
+        log::warn!(target: "eocc.perf", "{}: {:?}", label, elapsed);
+    }
+}
+
 #[tauri::command]
 pub fn get_dashboard_data(state: tauri::State<'_, ManagedState>) -> Result<DashboardData, String> {
+    let start = std::time::Instant::now();
     let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
-    Ok(state_guard.to_dashboard_data())
+    log_slow_lock("get_dashboard_data", start.elapsed());
+    let result = Ok(state_guard.to_dashboard_data());
+    log_slow_op("get_dashboard_data", start.elapsed());
+    result
 }
 
 #[tauri::command]
@@ -29,11 +45,18 @@ pub fn remove_session(
     state: tauri::State<'_, ManagedState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
-    state_guard.sessions.remove(&project_dir);
-    update_tray_and_badge(&app, &state_guard);
-    emit_state_update(&app, &state_guard);
-    save_runtime_state(&app, &state_guard);
+    let start = std::time::Instant::now();
+    let lock_start = std::time::Instant::now();
+    let state_clone = {
+        let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("remove_session", lock_start.elapsed());
+        state_guard.sessions.remove(&project_dir);
+        state_guard.clone()
+    };
+    update_tray_and_badge(&app, &state_clone);
+    emit_state_update(&app, &state_clone);
+    save_runtime_state(&app, &state_clone);
+    log_slow_op("remove_session", start.elapsed());
     Ok(())
 }
 
@@ -42,17 +65,26 @@ pub fn clear_all_sessions(
     state: tauri::State<'_, ManagedState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
-    state_guard.sessions.clear();
-    update_tray_and_badge(&app, &state_guard);
-    emit_state_update(&app, &state_guard);
-    save_runtime_state(&app, &state_guard);
+    let start = std::time::Instant::now();
+    let lock_start = std::time::Instant::now();
+    let state_clone = {
+        let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("clear_all_sessions", lock_start.elapsed());
+        state_guard.sessions.clear();
+        state_guard.clone()
+    };
+    update_tray_and_badge(&app, &state_clone);
+    emit_state_update(&app, &state_clone);
+    save_runtime_state(&app, &state_clone);
+    log_slow_op("clear_all_sessions", start.elapsed());
     Ok(())
 }
 
 #[tauri::command]
 pub fn get_always_on_top(state: tauri::State<'_, ManagedState>) -> Result<bool, String> {
+    let start = std::time::Instant::now();
     let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("get_always_on_top", start.elapsed());
     Ok(state_guard.settings.always_on_top)
 }
 
@@ -62,21 +94,29 @@ pub fn set_always_on_top(
     state: tauri::State<'_, ManagedState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
-    state_guard.settings.always_on_top = enabled;
-    save_settings(&app, &state_guard.settings);
+    let start = std::time::Instant::now();
+    let lock_start = std::time::Instant::now();
+    let state_clone = {
+        let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("set_always_on_top", lock_start.elapsed());
+        state_guard.settings.always_on_top = enabled;
+        state_guard.clone()
+    };
+    save_settings(&app, &state_clone.settings);
 
     if let Some(window) = app.get_webview_window("dashboard") {
         let _ = window.set_always_on_top(enabled);
     }
 
-    update_tray_and_badge(&app, &state_guard);
+    update_tray_and_badge(&app, &state_clone);
+    log_slow_op("set_always_on_top", start.elapsed());
     Ok(())
 }
 
 /// Set window size for setup modal (enlarged) or normal miniview
 #[tauri::command]
 pub fn set_window_size_for_setup(enlarged: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let start = std::time::Instant::now();
     if let Some(window) = app.get_webview_window("dashboard") {
         if enlarged {
             let _ = window.set_decorations(true);
@@ -90,12 +130,15 @@ pub fn set_window_size_for_setup(enlarged: bool, app: tauri::AppHandle) -> Resul
             let _ = window.set_size(tauri::LogicalSize::new(MINI_VIEW_WIDTH, MINI_VIEW_HEIGHT));
         }
     }
+    log_slow_op("set_window_size_for_setup", start.elapsed());
     Ok(())
 }
 
 #[tauri::command]
 pub fn get_settings(state: tauri::State<'_, ManagedState>) -> Result<Settings, String> {
+    let start = std::time::Instant::now();
     let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("get_settings", start.elapsed());
     Ok(state_guard.settings.clone())
 }
 
@@ -105,9 +148,12 @@ pub fn set_opacity_active(
     state: tauri::State<'_, ManagedState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let start = std::time::Instant::now();
     let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("set_opacity_active", start.elapsed());
     state_guard.settings.opacity_active = opacity.clamp(0.1, 1.0);
     save_settings(&app, &state_guard.settings);
+    log_slow_op("set_opacity_active", start.elapsed());
     Ok(())
 }
 
@@ -117,20 +163,29 @@ pub fn set_opacity_inactive(
     state: tauri::State<'_, ManagedState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let start = std::time::Instant::now();
     let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("set_opacity_inactive", start.elapsed());
     state_guard.settings.opacity_inactive = opacity.clamp(0.1, 1.0);
     save_settings(&app, &state_guard.settings);
+    log_slow_op("set_opacity_inactive", start.elapsed());
     Ok(())
 }
 
 #[tauri::command]
 pub fn get_repo_git_info(project_dir: String) -> GitInfo {
-    get_git_info(&project_dir)
+    let start = std::time::Instant::now();
+    let result = get_git_info(&project_dir);
+    log_slow_op("get_repo_git_info", start.elapsed());
+    result
 }
 
 #[tauri::command]
 pub fn get_repo_branches(project_dir: String) -> Vec<String> {
-    get_branches(&project_dir)
+    let start = std::time::Instant::now();
+    let result = get_branches(&project_dir);
+    log_slow_op("get_repo_branches", start.elapsed());
+    result
 }
 
 /// Generate a unique window label for a diff based on project and type
@@ -195,6 +250,7 @@ pub fn open_diff(
     state: tauri::State<'_, ManagedState>,
     difit_registry: tauri::State<'_, Arc<DifitProcessRegistry>>,
 ) -> Result<(), String> {
+    let start = std::time::Instant::now();
     // Validate project directory
     let path = Path::new(&project_dir);
     if !path.exists() {
@@ -221,7 +277,9 @@ pub fn open_diff(
 
     // Get cached npx path from state
     let npx_path = {
+        let lock_start = std::time::Instant::now();
         let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("open_diff", lock_start.elapsed());
         let path = state_guard.cached_paths.npx_path.clone();
         if path.is_empty() {
             None
@@ -246,6 +304,7 @@ pub fn open_diff(
                 let _ = existing_window.show();
                 let _ = existing_window.set_focus();
                 show_error_in_window(&existing_window, &e, &diff_type);
+                log_slow_op("open_diff(existing/error)", start.elapsed());
                 return Ok(());
             }
         };
@@ -257,6 +316,7 @@ pub fn open_diff(
             // No changes, just focus the window
             let _ = existing_window.show();
             let _ = existing_window.set_focus();
+            log_slow_op("open_diff(unchanged)", start.elapsed());
             return Ok(());
         }
 
@@ -284,6 +344,7 @@ pub fn open_diff(
         };
         spawn_difit_server_with_content(ctx, diff_content);
 
+        log_slow_op("open_diff(existing/changed)", start.elapsed());
         return Ok(());
     }
 
@@ -327,6 +388,7 @@ pub fn open_diff(
     };
     spawn_difit_server(ctx, diff, base_branch);
 
+    log_slow_op("open_diff(new)", start.elapsed());
     Ok(())
 }
 
@@ -513,9 +575,22 @@ pub fn open_claude_settings() -> Result<(), String> {
 // ============================================================================
 
 #[tauri::command]
-pub fn open_tmux_viewer(pane_id: String, app: tauri::AppHandle) -> Result<(), String> {
+pub fn open_tmux_viewer(
+    pane_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ManagedState>,
+) -> Result<(), String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
+    let start = std::time::Instant::now();
+
+    let always_on_top = {
+        let lock_start = std::time::Instant::now();
+        let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("open_tmux_viewer", lock_start.elapsed());
+        state_guard.settings.always_on_top
+    };
 
     let mut hasher = DefaultHasher::new();
     pane_id.hash(&mut hasher);
@@ -525,6 +600,7 @@ pub fn open_tmux_viewer(pane_id: String, app: tauri::AppHandle) -> Result<(), St
     if let Some(existing_window) = app.get_webview_window(&window_label) {
         let _ = existing_window.show();
         let _ = existing_window.set_focus();
+        log_slow_op("open_tmux_viewer(existing)", start.elapsed());
         return Ok(());
     }
 
@@ -536,9 +612,11 @@ pub fn open_tmux_viewer(pane_id: String, app: tauri::AppHandle) -> Result<(), St
         .center()
         .transparent(true)
         .decorations(true)
+        .always_on_top(always_on_top)
         .build()
         .map_err(|e| format!("Failed to create tmux viewer window: {}", e))?;
 
+    log_slow_op("open_tmux_viewer", start.elapsed());
     Ok(())
 }
 
@@ -549,20 +627,32 @@ pub fn tmux_is_available() -> bool {
 
 #[tauri::command]
 pub fn tmux_list_panes() -> Result<Vec<TmuxPane>, String> {
-    tmux::list_panes()
+    let start = std::time::Instant::now();
+    let result = tmux::list_panes();
+    log_slow_op("tmux_list_panes", start.elapsed());
+    result
 }
 
 #[tauri::command]
 pub fn tmux_capture_pane(pane_id: String) -> Result<String, String> {
-    tmux::capture_pane(&pane_id)
+    let start = std::time::Instant::now();
+    let result = tmux::capture_pane(&pane_id);
+    log_slow_op("tmux_capture_pane", start.elapsed());
+    result
 }
 
 #[tauri::command]
 pub fn tmux_send_keys(pane_id: String, keys: String) -> Result<(), String> {
-    tmux::send_keys(&pane_id, &keys)
+    let start = std::time::Instant::now();
+    let result = tmux::send_keys(&pane_id, &keys);
+    log_slow_op("tmux_send_keys", start.elapsed());
+    result
 }
 
 #[tauri::command]
 pub fn tmux_get_pane_size(pane_id: String) -> Result<TmuxPaneSize, String> {
-    tmux::get_pane_size(&pane_id)
+    let start = std::time::Instant::now();
+    let result = tmux::get_pane_size(&pane_id);
+    log_slow_op("tmux_get_pane_size", start.elapsed());
+    result
 }

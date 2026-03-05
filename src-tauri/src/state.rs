@@ -157,7 +157,7 @@ impl CachedPaths {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AppState {
     pub sessions: HashMap<String, SessionInfo>,
     pub recent_events: VecDeque<EventInfo>,

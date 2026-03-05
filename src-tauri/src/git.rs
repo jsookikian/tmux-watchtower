@@ -15,6 +15,7 @@ pub struct GitInfo {
 
 /// Get git information for a repository
 pub fn get_git_info(repo_path: &str) -> GitInfo {
+    let start = std::time::Instant::now();
     let path = Path::new(repo_path);
     if !path.exists() {
         return GitInfo::default();
@@ -32,6 +33,11 @@ pub fn get_git_info(repo_path: &str) -> GitInfo {
     let has_unstaged_changes = check_unstaged_changes(repo_path);
     let has_staged_changes = check_staged_changes(repo_path);
 
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(100) {
+        log::warn!(target: "eocc.perf", "get_git_info({}): {:?}", repo_path, elapsed);
+    }
+
     GitInfo {
         branch,
         default_branch,
@@ -44,11 +50,17 @@ pub fn get_git_info(repo_path: &str) -> GitInfo {
 }
 
 fn run_git_command(repo_path: &str, args: &[&str]) -> Option<String> {
+    let start = std::time::Instant::now();
     let output = Command::new("git")
         .args(["-C", repo_path])
         .args(args)
         .output()
         .ok()?;
+
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(200) {
+        log::warn!(target: "eocc.perf", "git {:?}: {:?}", args, elapsed);
+    }
 
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -71,11 +83,17 @@ fn get_latest_commit(repo_path: &str) -> (String, String) {
 
 fn check_unstaged_changes(repo_path: &str) -> bool {
     // Check for unstaged changes in tracked files using git diff
+    let start = std::time::Instant::now();
     let has_tracked_changes = Command::new("git")
         .args(["-C", repo_path, "diff", "--quiet"])
         .status()
         .map(|s| !s.success()) // exit code 1 means there are changes
         .unwrap_or(false);
+
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(200) {
+        log::warn!(target: "eocc.perf", "git diff --quiet: {:?}", elapsed);
+    }
 
     // Check for untracked files
     let has_untracked = run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"])
@@ -87,11 +105,19 @@ fn check_unstaged_changes(repo_path: &str) -> bool {
 
 fn check_staged_changes(repo_path: &str) -> bool {
     // Check for staged changes using git diff --cached
-    Command::new("git")
+    let start = std::time::Instant::now();
+    let result = Command::new("git")
         .args(["-C", repo_path, "diff", "--cached", "--quiet"])
         .status()
         .map(|s| !s.success()) // exit code 1 means there are staged changes
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    let elapsed = start.elapsed();
+    if elapsed > std::time::Duration::from_millis(200) {
+        log::warn!(target: "eocc.perf", "git diff --cached --quiet: {:?}", elapsed);
+    }
+
+    result
 }
 
 /// Get list of local branches for a repository

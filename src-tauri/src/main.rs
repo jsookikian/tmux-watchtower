@@ -115,22 +115,51 @@ fn start_file_watcher(app_handle: tauri::AppHandle, state: Arc<Mutex<AppState>>)
             match rx.recv() {
                 Ok(_event) => {
                     // File I/O outside of lock - this is the main fix for IO blocking
+                    let read_start = std::time::Instant::now();
                     let new_events = read_events_from_queue(&app_handle);
+                    let read_elapsed = read_start.elapsed();
+                    if read_elapsed > std::time::Duration::from_millis(50) {
+                        log::warn!(target: "eocc.perf", "watcher: read_events_from_queue ({} events): {:?}", new_events.len(), read_elapsed);
+                    }
 
                     if !new_events.is_empty() {
-                        // Acquire lock only for state updates, then release immediately
-                        let snapshot = {
+                        // Acquire lock, update state, clone, then release BEFORE UI operations.
+                        // UI calls (set_menu, set_tooltip, set_badge_count) dispatch to the main
+                        // thread. Holding the Mutex while dispatching causes a deadlock when the
+                        // main thread also needs the lock (e.g. IPC handler / menu event).
+                        let (snapshot, state_clone) = {
+                            let lock_start = std::time::Instant::now();
                             let Ok(mut state_guard) = state.lock() else {
                                 eprintln!("[eocc] Failed to acquire state lock in watcher");
                                 continue;
                             };
+                            let lock_elapsed = lock_start.elapsed();
+                            if lock_elapsed > std::time::Duration::from_millis(10) {
+                                log::warn!(target: "eocc.perf", "watcher: slow lock {:?}", lock_elapsed);
+                            }
+
                             apply_events_to_state(&mut state_guard, &new_events);
-                            update_tray_and_badge(&app_handle, &state_guard);
-                            emit_state_update(&app_handle, &state_guard);
-                            create_runtime_snapshot(&state_guard)
+                            let snapshot = create_runtime_snapshot(&state_guard);
+                            let cloned = state_guard.clone();
+                            (snapshot, cloned)
                         };
+
+                        // UI operations outside of lock
+                        let tray_start = std::time::Instant::now();
+                        update_tray_and_badge(&app_handle, &state_clone);
+                        emit_state_update(&app_handle, &state_clone);
+                        let tray_elapsed = tray_start.elapsed();
+                        if tray_elapsed > std::time::Duration::from_millis(50) {
+                            log::warn!(target: "eocc.perf", "watcher: tray + emit: {:?}", tray_elapsed);
+                        }
+
                         // File I/O outside of lock
+                        let save_start = std::time::Instant::now();
                         save_runtime_snapshot(&app_handle, &snapshot);
+                        let save_elapsed = save_start.elapsed();
+                        if save_elapsed > std::time::Duration::from_millis(50) {
+                            log::warn!(target: "eocc.perf", "watcher: save_runtime_snapshot: {:?}", save_elapsed);
+                        }
                     }
                 }
                 Err(e) => {
@@ -199,9 +228,14 @@ fn main() {
 
             // Load settings and existing events
             {
+                let lock_start = std::time::Instant::now();
                 let mut state_guard = state_for_tray.lock().map_err(|_| {
                     tauri::Error::Anyhow(anyhow::anyhow!("Failed to acquire state lock"))
                 })?;
+                let lock_elapsed = lock_start.elapsed();
+                if lock_elapsed > std::time::Duration::from_millis(10) {
+                    log::warn!(target: "eocc.perf", "setup: load_settings slow lock {:?}", lock_elapsed);
+                }
                 state_guard.settings = load_settings(&app_handle);
                 // Restore previous in-memory state snapshot (sessions/recent events/cached paths)
                 if let Some(restored) = load_runtime_state(&app_handle) {
@@ -215,23 +249,38 @@ fn main() {
 
             // Drain any queued events written by the hook while app was not running
             // File I/O is done outside of lock
+            let drain_start = std::time::Instant::now();
             let new_events = read_events_from_queue(&app_handle);
             if !new_events.is_empty() {
+                let lock_start = std::time::Instant::now();
                 let snapshot = {
                     let mut state_guard = state_for_tray.lock().map_err(|_| {
                         tauri::Error::Anyhow(anyhow::anyhow!("Failed to acquire state lock"))
                     })?;
+                    let lock_elapsed = lock_start.elapsed();
+                    if lock_elapsed > std::time::Duration::from_millis(10) {
+                        log::warn!(target: "eocc.perf", "setup: drain_events slow lock {:?}", lock_elapsed);
+                    }
                     apply_events_to_state(&mut state_guard, &new_events);
                     create_runtime_snapshot(&state_guard)
                 };
                 save_runtime_snapshot(&app_handle, &snapshot);
             }
+            let drain_elapsed = drain_start.elapsed();
+            if drain_elapsed > std::time::Duration::from_millis(100) {
+                log::warn!(target: "eocc.perf", "setup: drain_events ({} events): {:?}", new_events.len(), drain_elapsed);
+            }
 
             // Get initial settings
             let always_on_top = {
+                let lock_start = std::time::Instant::now();
                 let state_guard = state_for_tray.lock().map_err(|_| {
                     tauri::Error::Anyhow(anyhow::anyhow!("Failed to acquire state lock"))
                 })?;
+                let lock_elapsed = lock_start.elapsed();
+                if lock_elapsed > std::time::Duration::from_millis(10) {
+                    log::warn!(target: "eocc.perf", "setup: always_on_top slow lock {:?}", lock_elapsed);
+                }
                 state_guard.settings.always_on_top
             };
 
@@ -269,9 +318,14 @@ fn main() {
             // Build app menu bar
             let state_for_app_menu = Arc::clone(&state_clone);
             let app_menu = {
+                let lock_start = std::time::Instant::now();
                 let state_guard = state_for_tray.lock().map_err(|_| {
                     tauri::Error::Anyhow(anyhow::anyhow!("Failed to acquire state lock"))
                 })?;
+                let lock_elapsed = lock_start.elapsed();
+                if lock_elapsed > std::time::Duration::from_millis(10) {
+                    log::warn!(target: "eocc.perf", "setup: build_app_menu slow lock {:?}", lock_elapsed);
+                }
                 build_app_menu(&app_handle, &state_guard)?
             };
 
@@ -290,46 +344,84 @@ fn main() {
                         }
                         Err(e) => eprintln!("[eocc] Cannot open logs: {}", e),
                     },
-                    "always_on_top" => match state.lock() {
-                        Ok(mut state_guard) => {
-                            toggle_always_on_top(app, &mut state_guard);
-                            update_tray_and_badge(app, &state_guard);
+                    "always_on_top" => {
+                        let menu_start = std::time::Instant::now();
+                        match state.lock() {
+                            Ok(mut state_guard) => {
+                                let lock_elapsed = menu_start.elapsed();
+                                if lock_elapsed > std::time::Duration::from_millis(10) {
+                                    log::warn!(target: "eocc.perf", "menu always_on_top: slow lock {:?}", lock_elapsed);
+                                }
+                                toggle_always_on_top(app, &mut state_guard);
+                                update_tray_and_badge(app, &state_guard);
+                            }
+                            Err(e) => {
+                                eprintln!("[eocc] Failed to acquire lock for always_on_top: {:?}", e)
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("[eocc] Failed to acquire lock for always_on_top: {:?}", e)
+                        let menu_elapsed = menu_start.elapsed();
+                        if menu_elapsed > std::time::Duration::from_millis(100) {
+                            log::warn!(target: "eocc.perf", "menu always_on_top: {:?}", menu_elapsed);
                         }
-                    },
-                    "minimum_mode_enabled" => match state.lock() {
-                        Ok(mut state_guard) => {
-                            state_guard.settings.minimum_mode_enabled =
-                                !state_guard.settings.minimum_mode_enabled;
-                            save_settings(app, &state_guard.settings);
-                            let _ = app.emit("settings-updated", &state_guard.settings);
-                            update_tray_and_badge(app, &state_guard);
+                    }
+                    "minimum_mode_enabled" => {
+                        let menu_start = std::time::Instant::now();
+                        match state.lock() {
+                            Ok(mut state_guard) => {
+                                let lock_elapsed = menu_start.elapsed();
+                                if lock_elapsed > std::time::Duration::from_millis(10) {
+                                    log::warn!(target: "eocc.perf", "menu minimum_mode_enabled: slow lock {:?}", lock_elapsed);
+                                }
+                                state_guard.settings.minimum_mode_enabled =
+                                    !state_guard.settings.minimum_mode_enabled;
+                                save_settings(app, &state_guard.settings);
+                                let _ = app.emit("settings-updated", &state_guard.settings);
+                                update_tray_and_badge(app, &state_guard);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[eocc] Failed to acquire lock for minimum_mode_enabled: {:?}",
+                                    e
+                                )
+                            }
                         }
-                        Err(e) => {
-                            eprintln!(
-                                "[eocc] Failed to acquire lock for minimum_mode_enabled: {:?}",
-                                e
-                            )
+                        let menu_elapsed = menu_start.elapsed();
+                        if menu_elapsed > std::time::Duration::from_millis(100) {
+                            log::warn!(target: "eocc.perf", "menu minimum_mode_enabled: {:?}", menu_elapsed);
                         }
-                    },
-                    "sound_enabled" => match state.lock() {
-                        Ok(mut state_guard) => {
-                            state_guard.settings.sound_enabled =
-                                !state_guard.settings.sound_enabled;
-                            save_settings(app, &state_guard.settings);
-                            let _ = app.emit("settings-updated", &state_guard.settings);
-                            update_tray_and_badge(app, &state_guard);
+                    }
+                    "sound_enabled" => {
+                        let menu_start = std::time::Instant::now();
+                        match state.lock() {
+                            Ok(mut state_guard) => {
+                                let lock_elapsed = menu_start.elapsed();
+                                if lock_elapsed > std::time::Duration::from_millis(10) {
+                                    log::warn!(target: "eocc.perf", "menu sound_enabled: slow lock {:?}", lock_elapsed);
+                                }
+                                state_guard.settings.sound_enabled =
+                                    !state_guard.settings.sound_enabled;
+                                save_settings(app, &state_guard.settings);
+                                let _ = app.emit("settings-updated", &state_guard.settings);
+                                update_tray_and_badge(app, &state_guard);
+                            }
+                            Err(e) => {
+                                eprintln!("[eocc] Failed to acquire lock for sound_enabled: {:?}", e)
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("[eocc] Failed to acquire lock for sound_enabled: {:?}", e)
+                        let menu_elapsed = menu_start.elapsed();
+                        if menu_elapsed > std::time::Duration::from_millis(100) {
+                            log::warn!(target: "eocc.perf", "menu sound_enabled: {:?}", menu_elapsed);
                         }
-                    },
+                    }
                     other => {
                         if let Some((is_active, opacity)) = parse_opacity_menu_id(other) {
+                            let menu_start = std::time::Instant::now();
                             match state.lock() {
                                 Ok(mut state_guard) => {
+                                    let lock_elapsed = menu_start.elapsed();
+                                    if lock_elapsed > std::time::Duration::from_millis(10) {
+                                        log::warn!(target: "eocc.perf", "menu opacity: slow lock {:?}", lock_elapsed);
+                                    }
                                     if is_active {
                                         state_guard.settings.opacity_active = opacity;
                                     } else {
@@ -343,6 +435,10 @@ fn main() {
                                     eprintln!("[eocc] Failed to acquire lock for opacity: {:?}", e)
                                 }
                             }
+                            let menu_elapsed = menu_start.elapsed();
+                            if menu_elapsed > std::time::Duration::from_millis(100) {
+                                log::warn!(target: "eocc.perf", "menu opacity: {:?}", menu_elapsed);
+                            }
                         }
                     }
                 }
@@ -352,9 +448,14 @@ fn main() {
             let state_for_tray_clone = Arc::clone(&state_for_tray);
             let app_handle_for_tray = app_handle.clone();
             let tray_menu = {
+                let lock_start = std::time::Instant::now();
                 let state_guard = state_for_tray.lock().map_err(|_| {
                     tauri::Error::Anyhow(anyhow::anyhow!("Failed to acquire state lock"))
                 })?;
+                let lock_elapsed = lock_start.elapsed();
+                if lock_elapsed > std::time::Duration::from_millis(10) {
+                    log::warn!(target: "eocc.perf", "setup: build_tray_menu slow lock {:?}", lock_elapsed);
+                }
                 build_tray_menu(&app_handle, &state_guard)?
             };
 
@@ -377,8 +478,13 @@ fn main() {
                         Err(e) => eprintln!("[eocc] Cannot open logs: {}", e),
                     },
                     "clear_sessions" => {
+                        let tray_start = std::time::Instant::now();
                         let snapshot = match state_for_tray_clone.lock() {
                             Ok(mut state_guard) => {
+                                let lock_elapsed = tray_start.elapsed();
+                                if lock_elapsed > std::time::Duration::from_millis(10) {
+                                    log::warn!(target: "eocc.perf", "tray clear_sessions: slow lock {:?}", lock_elapsed);
+                                }
                                 state_guard.sessions.clear();
                                 update_tray_and_badge(app, &state_guard);
                                 emit_state_update(app, &state_guard);
@@ -394,6 +500,10 @@ fn main() {
                         };
                         if let Some(snapshot) = snapshot {
                             save_runtime_snapshot(app, &snapshot);
+                        }
+                        let tray_elapsed = tray_start.elapsed();
+                        if tray_elapsed > std::time::Duration::from_millis(100) {
+                            log::warn!(target: "eocc.perf", "tray clear_sessions: {:?}", tray_elapsed);
                         }
                     }
                     _ => {}
