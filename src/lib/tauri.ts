@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWindow, getAllWindows } from '@tauri-apps/api/window';
+import { getAllWindows } from '@tauri-apps/api/window';
 import type {
   DashboardData,
   DiffType,
