@@ -16,7 +16,7 @@ export const Header = ({ sessions, onRefresh }: HeaderProps) => {
     <header className="flex flex-col gap-1.5 pb-1.5 shrink-0">
       <div className="flex justify-between items-center border-b border-bg-card py-1.5 flex-nowrap">
         <div className="flex items-center gap-3">
-          <h1 className="font-semibold text-sm whitespace-nowrap">Eyes on Claude Code</h1>
+          <h1 className="font-semibold text-sm whitespace-nowrap">Watchtower</h1>
         </div>
         <div className="flex items-center gap-2 bg-bg-card rounded-full py-0.5 px-2 text-[0.625rem] whitespace-nowrap shrink-0">
           <div

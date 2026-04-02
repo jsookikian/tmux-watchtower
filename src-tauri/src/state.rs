@@ -79,9 +79,35 @@ impl SessionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchedPaneConfig {
+    pub pane_id: String,
+    pub label: String,
+    pub error_patterns: Vec<String>,
+    pub success_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchedPaneStatus {
+    Running,
+    Errored,
+    Idle,
+    Unreachable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchedPaneInfo {
+    pub config: WatchedPaneConfig,
+    pub status: WatchedPaneStatus,
+    pub last_output_snippet: String,
+    pub last_checked: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardData {
     pub sessions: Vec<SessionInfo>,
     pub events: Vec<EventInfo>,
+    pub watched_panes: Vec<WatchedPaneInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +122,8 @@ pub struct Settings {
     pub opacity_inactive: f64,
     #[serde(default = "Settings::default_sound_enabled")]
     pub sound_enabled: bool,
+    #[serde(default)]
+    pub watched_pane_configs: Vec<WatchedPaneConfig>,
 }
 
 impl Settings {
@@ -134,6 +162,7 @@ impl Default for Settings {
             opacity_active: Self::DEFAULT_OPACITY_ACTIVE,
             opacity_inactive: Self::DEFAULT_OPACITY_INACTIVE,
             sound_enabled: Self::DEFAULT_SOUND_ENABLED,
+            watched_pane_configs: Vec::new(),
         }
     }
 }
@@ -163,6 +192,7 @@ pub struct AppState {
     pub recent_events: VecDeque<EventInfo>,
     pub settings: Settings,
     pub cached_paths: CachedPaths,
+    pub watched_panes: HashMap<String, WatchedPaneInfo>,
 }
 
 impl AppState {
@@ -189,9 +219,13 @@ impl AppState {
             }
         });
 
+        let mut watched_panes: Vec<WatchedPaneInfo> = self.watched_panes.values().cloned().collect();
+        watched_panes.sort_by(|a, b| a.config.label.cmp(&b.config.label));
+
         DashboardData {
             sessions,
             events: self.recent_events.iter().cloned().collect(),
+            watched_panes,
         }
     }
 

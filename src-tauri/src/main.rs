@@ -27,11 +27,12 @@ use difit::DifitProcessRegistry;
 use tauri_plugin_log::RotationStrategy;
 
 use commands::{
-    check_claude_settings, clear_all_sessions, get_always_on_top, get_dashboard_data,
-    get_repo_branches, get_repo_git_info, get_settings, get_setup_status, install_hook,
-    open_claude_settings, open_diff, open_tmux_viewer, remove_session, set_always_on_top,
-    set_opacity_active, set_opacity_inactive, set_window_size_for_setup, tmux_capture_pane,
-    tmux_get_pane_size, tmux_is_available, tmux_list_panes, tmux_send_keys,
+    add_watched_pane, check_claude_settings, clear_all_sessions, get_always_on_top,
+    get_dashboard_data, get_repo_branches, get_repo_git_info, get_settings, get_setup_status,
+    get_watched_panes, install_hook, list_available_panes, open_claude_settings, open_diff,
+    open_tmux_viewer, remove_session, remove_watched_pane, set_always_on_top, set_opacity_active,
+    set_opacity_inactive, set_window_size_for_setup, tmux_capture_pane, tmux_get_pane_size,
+    tmux_is_available, tmux_list_panes, tmux_send_keys,
 };
 use constants::{ICON_NORMAL, MINI_VIEW_HEIGHT, MINI_VIEW_WIDTH};
 use events::{apply_events_to_state, read_events_from_queue};
@@ -65,10 +66,10 @@ fn create_dashboard_window(
 
     let base_builder =
         WebviewWindowBuilder::new(app, "dashboard", WebviewUrl::App("index.html".into()))
-            .title("Eyes on Claude Code")
-            .inner_size(MINI_VIEW_WIDTH, MINI_VIEW_HEIGHT)
+            .title("Watchtower")
+            .inner_size(320.0, 500.0)
             .min_inner_size(200.0, 300.0)
-            .center()
+            .position(1200.0, 30.0)
             .visible(true)
             .always_on_top(always_on_top)
             .decorations(false)
@@ -171,6 +172,122 @@ fn start_file_watcher(app_handle: tauri::AppHandle, state: Arc<Mutex<AppState>>)
     });
 }
 
+fn apply_pane_updates_to_state(
+    state: &mut state::AppState,
+    updates: Vec<(String, state::WatchedPaneInfo)>,
+) {
+    for (pane_id, info) in updates {
+        state.watched_panes.insert(pane_id, info);
+    }
+}
+
+fn start_watched_pane_poller(app_handle: tauri::AppHandle, state: Arc<Mutex<state::AppState>>) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            let configs = {
+                let Ok(state_guard) = state.lock() else {
+                    continue;
+                };
+                state_guard.settings.watched_pane_configs.clone()
+            };
+
+            if configs.is_empty() {
+                continue;
+            }
+
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let now = format!("{}", now_secs);
+
+            let mut updates: Vec<(String, state::WatchedPaneInfo)> = Vec::new();
+            let mut remove_pane_ids: Vec<String> = Vec::new();
+
+            for config in configs {
+                let (status, snippet) = match tmux::capture_pane_tail(&config.pane_id, 50) {
+                    Err(_) => {
+                        // Pane gone — mark for removal
+                        remove_pane_ids.push(config.pane_id.clone());
+                        continue;
+                    }
+                    Ok(output) => {
+                        let error_patterns: Vec<regex::Regex> = config
+                            .error_patterns
+                            .iter()
+                            .filter_map(|p| regex::Regex::new(p).ok())
+                            .collect();
+                        let success_patterns: Vec<regex::Regex> = config
+                            .success_patterns
+                            .iter()
+                            .filter_map(|p| regex::Regex::new(p).ok())
+                            .collect();
+
+                        let has_success = success_patterns.iter().any(|r| r.is_match(&output));
+                        let has_error = error_patterns.iter().any(|r| r.is_match(&output));
+
+                        let status = if has_success && !has_error {
+                            state::WatchedPaneStatus::Running
+                        } else if has_error && !has_success {
+                            state::WatchedPaneStatus::Errored
+                        } else if has_success && has_error {
+                            // Both match — success takes priority (e.g. "error" in module names)
+                            state::WatchedPaneStatus::Running
+                        } else {
+                            state::WatchedPaneStatus::Idle
+                        };
+
+                        let snippet: String = output
+                            .lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .rev()
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+
+                        (status, snippet)
+                    }
+                };
+
+                updates.push((
+                    config.pane_id.clone(),
+                    state::WatchedPaneInfo {
+                        config,
+                        status,
+                        last_output_snippet: snippet,
+                        last_checked: now.clone(),
+                    },
+                ));
+            }
+
+            let panes_payload = {
+                let Ok(mut state_guard) = state.lock() else {
+                    continue;
+                };
+                apply_pane_updates_to_state(&mut state_guard, updates);
+                for id in &remove_pane_ids {
+                    state_guard.watched_panes.remove(id);
+                    state_guard.settings.watched_pane_configs.retain(|c| c.pane_id != *id);
+                }
+                if !remove_pane_ids.is_empty() {
+                    crate::settings::save_settings(&app_handle, &state_guard.settings);
+                }
+                let mut panes: Vec<state::WatchedPaneInfo> =
+                    state_guard.watched_panes.values().cloned().collect();
+                panes.sort_by(|a, b| a.config.label.cmp(&b.config.label));
+                panes
+            };
+
+            let _ = app_handle.emit("watched-panes-updated", &panes_payload);
+        }
+    });
+}
+
 fn main() {
     let state = Arc::new(Mutex::new(AppState::default()));
     let difit_registry = Arc::new(DifitProcessRegistry::new());
@@ -214,7 +331,12 @@ fn main() {
             tmux_capture_pane,
             tmux_send_keys,
             tmux_get_pane_size,
-            open_tmux_viewer
+            open_tmux_viewer,
+            // Watched pane commands
+            add_watched_pane,
+            remove_watched_pane,
+            get_watched_panes,
+            list_available_panes
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -237,6 +359,26 @@ fn main() {
                     log::warn!(target: "eocc.perf", "setup: load_settings slow lock {:?}", lock_elapsed);
                 }
                 state_guard.settings = load_settings(&app_handle);
+
+                // Initialize watched_panes from persisted configs with Idle status
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let now = format!("{}", now_secs);
+                let configs: Vec<_> = state_guard.settings.watched_pane_configs.clone();
+                for config in configs {
+                    state_guard.watched_panes.insert(
+                        config.pane_id.clone(),
+                        state::WatchedPaneInfo {
+                            config,
+                            status: state::WatchedPaneStatus::Idle,
+                            last_output_snippet: String::new(),
+                            last_checked: now.clone(),
+                        },
+                    );
+                }
+
                 // Restore previous in-memory state snapshot (sessions/recent events/cached paths)
                 if let Some(restored) = load_runtime_state(&app_handle) {
                     state_guard.sessions = restored.sessions;
@@ -465,8 +607,8 @@ fn main() {
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(initial_icon)
                 .menu(&tray_menu)
-                .show_menu_on_left_click(true)
-                .tooltip("Eyes on Claude Code")
+                .show_menu_on_left_click(false)
+                .tooltip("Watchtower")
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "open_dashboard" => {
                         show_dashboard(app);
@@ -508,20 +650,26 @@ fn main() {
                     }
                     _ => {}
                 })
-                .on_tray_icon_event(|_tray, event| {
+                .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        // Menu will show automatically
+                        if let Some(window) = tray.app_handle().get_webview_window("dashboard") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
                 })
                 .build(app)?;
 
             // Start file watcher
             start_file_watcher(app.handle().clone(), Arc::clone(&state_clone));
+
+            // Start watched-pane polling thread
+            start_watched_pane_poller(app.handle().clone(), Arc::clone(&state_clone));
 
             Ok(())
         })

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Eyes on Claude Code",
+  "productName": "Watchtower",
   "identifier": "tech.joe-re.eocc",
   "version": "0.1.1",
   "build": {

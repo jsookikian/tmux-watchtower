@@ -36,9 +36,26 @@ export interface EventInfo {
   tmux_pane: string;
 }
 
+export type WatchedPaneStatus = 'running' | 'errored' | 'idle' | 'unreachable';
+
+export interface WatchedPaneConfig {
+  pane_id: string;
+  label: string;
+  error_patterns: string[];
+  success_patterns: string[];
+}
+
+export interface WatchedPaneInfo {
+  config: WatchedPaneConfig;
+  status: WatchedPaneStatus;
+  last_output_snippet: string;
+  last_checked: string;
+}
+
 export interface DashboardData {
   sessions: SessionInfo[];
   events: EventInfo[];
+  watched_panes: WatchedPaneInfo[];
 }
 
 export interface Settings {
@@ -69,6 +86,7 @@ export interface TmuxPane {
   window_name: string;
   pane_index: number;
   pane_id: string;
+  pane_title: string;
   is_active: boolean;
 }
 

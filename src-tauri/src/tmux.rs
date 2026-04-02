@@ -24,6 +24,34 @@ fn get_tmux_path() -> Option<PathBuf> {
             }
         }
     }
+
+    // Fall back to common installation paths
+    let common_paths = [
+        "/opt/homebrew/bin/tmux",
+        "/usr/local/bin/tmux",
+        "/usr/bin/tmux",
+    ];
+    for p in &common_paths {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Last resort: ask the shell
+    if let Ok(output) = Command::new("which").arg("tmux").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                let path = PathBuf::from(trimmed);
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -34,6 +62,7 @@ pub struct TmuxPane {
     pub window_name: String,
     pub pane_index: u32,
     pub pane_id: String,
+    pub pane_title: String,
     pub is_active: bool,
 }
 
@@ -85,21 +114,22 @@ pub fn is_tmux_available() -> bool {
 
 pub fn list_panes() -> Result<Vec<TmuxPane>, String> {
     let format =
-        "#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_id}|#{pane_active}";
+        "#{session_name}|#{window_index}|#{window_name}|#{pane_index}|#{pane_id}|#{pane_title}|#{pane_active}";
     let output = run_tmux_command(&["list-panes", "-a", "-F", format])?;
 
     let panes: Vec<TmuxPane> = output
         .lines()
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() >= 6 {
+            if parts.len() >= 7 {
                 Some(TmuxPane {
                     session_name: parts[0].to_string(),
                     window_index: parts[1].parse().unwrap_or(0),
                     window_name: parts[2].to_string(),
                     pane_index: parts[3].parse().unwrap_or(0),
                     pane_id: parts[4].to_string(),
-                    is_active: parts[5] == "1",
+                    pane_title: parts[5].to_string(),
+                    is_active: parts[6] == "1",
                 })
             } else {
                 None
@@ -159,4 +189,13 @@ pub fn get_pane_size(pane_id: &str) -> Result<TmuxPaneSize, String> {
         .parse()
         .map_err(|_| format!("Invalid height: {}", parts[1]))?;
     Ok(TmuxPaneSize { width, height })
+}
+
+/// Capture the last `lines` lines of a pane as plain text (no ANSI escapes).
+/// Used for regex-based status detection in the watched-pane polling loop.
+pub fn capture_pane_tail(pane_id: &str, lines: u32) -> Result<String, String> {
+    validate_pane_id(pane_id)?;
+    let start_arg = format!("-{}", lines);
+    // -p: stdout, no -e: plain text so regex matching works correctly
+    run_tmux_command(&["capture-pane", "-p", "-S", &start_arg, "-t", pane_id])
 }

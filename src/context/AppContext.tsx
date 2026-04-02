@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { DashboardData, Settings, SessionInfo } from '@/types';
-import { getDashboardData, getSettings, onStateUpdated, onSettingsUpdated } from '@/lib/tauri';
+import {
+  getDashboardData,
+  getSettings,
+  onStateUpdated,
+  onSettingsUpdated,
+  onWatchedPanesUpdated,
+} from '@/lib/tauri';
 import { playCompletionSound, playWaitingSound } from '@/lib/audio';
 import { AppContext, defaultDashboardData, defaultSettings } from './appContextStore';
 
@@ -79,6 +85,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
     onSettingsUpdated((newSettings) => {
       setSettings(newSettings);
+    }).then((unlisten) => unlisteners.push(unlisten));
+
+    onWatchedPanesUpdated((panes) => {
+      setDashboardData((prev) => ({ ...prev, watched_panes: panes }));
     }).then((unlisten) => unlisteners.push(unlisten));
 
     return () => {

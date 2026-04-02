@@ -16,11 +16,11 @@ pub fn update_tray_and_badge(app: &tauri::AppHandle, state: &AppState) {
 
         // Update tooltip
         let tooltip = if waiting_count > 0 {
-            format!("Eyes on Claude Code - {} waiting", waiting_count)
+            format!("Watchtower - {} waiting", waiting_count)
         } else if state.sessions.is_empty() {
-            "Eyes on Claude Code - No active sessions".to_string()
+            "Watchtower - No active sessions".to_string()
         } else {
-            "Eyes on Claude Code".to_string()
+            "Watchtower".to_string()
         };
         let _ = tray.set_tooltip(Some(tooltip));
     }

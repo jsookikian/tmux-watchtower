@@ -9,6 +9,8 @@ import type {
   SetupStatus,
   TmuxPane,
   TmuxPaneSize,
+  WatchedPaneConfig,
+  WatchedPaneInfo,
 } from '@/types';
 
 // Commands
@@ -67,3 +69,15 @@ export const tmuxSendKeys = (paneId: string, keys: string) =>
 export const tmuxGetPaneSize = (paneId: string) =>
   invoke<TmuxPaneSize>('tmux_get_pane_size', { paneId });
 export const openTmuxViewer = (paneId: string) => invoke('open_tmux_viewer', { paneId });
+
+// Watched pane commands
+export const addWatchedPane = (config: WatchedPaneConfig) => invoke('add_watched_pane', { config });
+export const removeWatchedPane = (paneId: string) => invoke('remove_watched_pane', { paneId });
+export const getWatchedPanes = () => invoke<WatchedPaneInfo[]>('get_watched_panes');
+export const listAvailablePanes = () => invoke<TmuxPane[]>('list_available_panes');
+
+export const onWatchedPanesUpdated = (
+  callback: (panes: WatchedPaneInfo[]) => void
+): Promise<UnlistenFn> => {
+  return listen<WatchedPaneInfo[]>('watched-panes-updated', (event) => callback(event.payload));
+};

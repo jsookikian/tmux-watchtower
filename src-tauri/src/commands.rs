@@ -11,7 +11,7 @@ use crate::git::{get_branches, get_git_info, GitInfo};
 use crate::persist::save_runtime_state;
 use crate::settings::save_settings;
 use crate::setup::{self, SetupStatus};
-use crate::state::{DashboardData, ManagedState, Settings};
+use crate::state::{DashboardData, ManagedState, Settings, WatchedPaneConfig, WatchedPaneInfo, WatchedPaneStatus};
 use crate::tmux::{self, TmuxPane, TmuxPaneSize};
 use crate::tray::{emit_state_update, update_tray_and_badge};
 
@@ -655,4 +655,100 @@ pub fn tmux_get_pane_size(pane_id: String) -> Result<TmuxPaneSize, String> {
     let result = tmux::get_pane_size(&pane_id);
     log_slow_op("tmux_get_pane_size", start.elapsed());
     result
+}
+
+// ============================================================================
+// Watched pane commands
+// ============================================================================
+
+#[tauri::command]
+pub fn add_watched_pane(
+    config: WatchedPaneConfig,
+    state: tauri::State<'_, ManagedState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use regex::Regex;
+
+    for pattern in config.error_patterns.iter().chain(config.success_patterns.iter()) {
+        Regex::new(pattern).map_err(|e| format!("Invalid regex pattern {:?}: {}", pattern, e))?;
+    }
+
+    let lock_start = std::time::Instant::now();
+    let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("add_watched_pane", lock_start.elapsed());
+
+    if state_guard.settings.watched_pane_configs.len() >= 20 {
+        return Err("Maximum of 20 watched panes reached".to_string());
+    }
+
+    let pane_id = config.pane_id.clone();
+
+    state_guard.settings.watched_pane_configs.retain(|c| c.pane_id != pane_id);
+    state_guard.settings.watched_pane_configs.push(config.clone());
+
+    let now = {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        format!("{}", secs)
+    };
+    state_guard.watched_panes.insert(
+        pane_id,
+        WatchedPaneInfo {
+            config,
+            status: WatchedPaneStatus::Idle,
+            last_output_snippet: String::new(),
+            last_checked: now,
+        },
+    );
+
+    crate::settings::save_settings(&app, &state_guard.settings);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_watched_pane(
+    pane_id: String,
+    state: tauri::State<'_, ManagedState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let lock_start = std::time::Instant::now();
+    let mut state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("remove_watched_pane", lock_start.elapsed());
+
+    state_guard.settings.watched_pane_configs.retain(|c| c.pane_id != pane_id);
+    state_guard.watched_panes.remove(&pane_id);
+
+    crate::settings::save_settings(&app, &state_guard.settings);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_watched_panes(state: tauri::State<'_, ManagedState>) -> Result<Vec<WatchedPaneInfo>, String> {
+    let lock_start = std::time::Instant::now();
+    let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+    log_slow_lock("get_watched_panes", lock_start.elapsed());
+    let mut panes: Vec<WatchedPaneInfo> = state_guard.watched_panes.values().cloned().collect();
+    panes.sort_by(|a, b| a.config.label.cmp(&b.config.label));
+    Ok(panes)
+}
+
+#[tauri::command]
+pub fn list_available_panes(state: tauri::State<'_, ManagedState>) -> Result<Vec<TmuxPane>, String> {
+    let start = std::time::Instant::now();
+    let watched_ids: std::collections::HashSet<String> = {
+        let lock_start = std::time::Instant::now();
+        let state_guard = state.0.lock().map_err(|_| LOCK_ERROR)?;
+        log_slow_lock("list_available_panes", lock_start.elapsed());
+        state_guard.watched_panes.keys().cloned().collect()
+    };
+
+    let all_panes = tmux::list_panes()?;
+    let result = all_panes
+        .into_iter()
+        .filter(|p| !watched_ids.contains(&p.pane_id))
+        .collect();
+    log_slow_op("list_available_panes", start.elapsed());
+    Ok(result)
 }

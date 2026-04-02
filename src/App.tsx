@@ -12,7 +12,7 @@ import { useWindowOpacity } from '@/hooks/useWindowOpacity';
 import { useWindowDrag } from '@/hooks/useWindowDrag';
 import { Header } from '@/components/Header';
 import { MinimumView } from '@/components/MinimumView';
-import { SessionList } from '@/components/SessionList';
+import { DashboardContent } from '@/components/DashboardContent';
 import { SetupModal } from '@/components/SetupModal';
 import { TmuxViewer } from '@/components/TmuxViewer';
 import {
@@ -333,13 +333,13 @@ const Dashboard = () => {
 
   // Show minimum view when inactive and minimum mode is enabled
   if (!isActive && settings.minimum_mode_enabled) {
-    return <MinimumView sessions={dashboardData.sessions} />;
+    return <MinimumView sessions={dashboardData.sessions} watchedPanes={dashboardData.watched_panes} />;
   }
 
   return (
     <div className="container bg-bg-primary h-screen rounded-xl max-w-[900px] mx-auto flex flex-col p-2.5">
       <Header sessions={dashboardData.sessions} onRefresh={refreshData} />
-      <SessionList sessions={dashboardData.sessions} />
+      <DashboardContent sessions={dashboardData.sessions} watchedPanes={dashboardData.watched_panes} />
     </div>
   );
 };

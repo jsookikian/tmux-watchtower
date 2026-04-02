@@ -126,7 +126,7 @@ fn build_help_events_submenu<R: Runtime>(
 /// Build the application menu bar
 ///
 /// Structure:
-/// - Eyes on Claude Code: About, Quit
+/// - Watchtower: About, Quit
 /// - Edit: Undo, Redo, Cut, Copy, Paste, Find
 /// - Window: Close, Open Dashboard, Always on Top, Opacity, Sound
 /// - Help: Open Log Directory, Recent Events
@@ -134,11 +134,11 @@ pub fn build_app_menu<R: Runtime>(
     app: &tauri::AppHandle<R>,
     state: &AppState,
 ) -> tauri::Result<Menu<R>> {
-    // Eyes on Claude Code menu (app menu)
+    // Watchtower menu (app menu)
     let version = app.config().version.clone();
-    let app_menu = SubmenuBuilder::new(app, "Eyes on Claude Code")
+    let app_menu = SubmenuBuilder::new(app, "Watchtower")
         .about(Some(AboutMetadata {
-            name: Some("Eyes on Claude Code".to_string()),
+            name: Some("Watchtower".to_string()),
             version,
             ..Default::default()
         }))
